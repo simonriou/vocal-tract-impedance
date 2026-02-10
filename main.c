@@ -9,6 +9,30 @@
 #define SAMPLE_RATE 44100
 #define NUM_CHANNELS 1
 
+void save_results_csv(const char *filename, kiss_fft_cpx *h_lips, int nfft) {
+    FILE *fp = fopen(filename, "w");
+    if (!fp) {
+        perror("Failed to open output file");
+        return;
+    }
+
+    fprintf(fp, "Frequency_Hz,Magnitude_dB,Phase_Rad\n");
+    for (int i = 0; i < nfft / 2; i++) { // Only positive frequencies
+        double f = (double)i * SAMPLE_RATE / nfft;
+        double mag = sqrt(complex_squared_magnitude(h_lips[i]));
+        
+        // Clamp distinctively small values to avoid log(-inf)
+        if (mag < 1e-9) mag = 1e-9;
+        double db = 20.0 * log10(mag);
+        
+        double phase = atan2(h_lips[i].i, h_lips[i].r);
+        
+        fprintf(fp, "%.2f,%.4f,%.4f\n", f, db, phase);
+    }
+    fclose(fp);
+    printf("Results saved to %s\n", filename);
+}
+
 int main() {
     // --- initialisation audio ---
     if (audio_init() != 0) {
@@ -277,10 +301,138 @@ int main() {
         free(chirp_buffer_final);
         free(record_buffer_final);
         audio_terminate();
-        
+
     } else if (choice == 3) {
         printf("Running processing...\n");
         // --- traitement ---
+
+        printf("PROCESSING MODE: Now initializing processing pipeline...\n");
+
+        // initialisation pipeline de traitement
+        // trouver nfft puissance de 2 supérieure à n_samples_chirp
+        int nfft = 1;
+        while (nfft < n_samples_chirp) {
+            nfft *= 2;
+        }
+        printf("\n##### Using FFT size of %d for processing #####\n\n", nfft);
+
+        // --- chargement des données de calibration et mesure depuisles fichiers .raw ---
+        float *calibration_response = (float*)malloc(sizeof(float) * n_samples_chirp * NUM_CHANNELS);
+        float *measurement_response = (float*)malloc(sizeof(float) * n_samples_chirp * NUM_CHANNELS);
+        if (!calibration_response || !measurement_response) {
+            fprintf(stderr, "Failed to allocate buffers for processing\n");
+            free(calibration_response);
+            free(measurement_response);
+            audio_terminate();
+            return -1;
+        }
+
+        FILE *calib_file = fopen("output/calibration_response.raw", "rb");
+        if (!calib_file) {
+            fprintf(stderr, "Failed to open calibration response file for reading\n");
+            free(calibration_response);
+            free(measurement_response);
+            audio_terminate();
+            return -1;
+        }
+
+        FILE *meas_file = fopen("output/measurement_response.raw", "rb");
+        if (!meas_file) {
+            fprintf(stderr, "Failed to open measurement response file for reading\n");
+            free(calibration_response);
+            free(measurement_response);
+            fclose(calib_file);
+            audio_terminate();
+            return -1;
+        }
+
+        fread(calibration_response, sizeof(float), n_samples_chirp * NUM_CHANNELS, calib_file);
+        fread(measurement_response, sizeof(float), n_samples_chirp * NUM_CHANNELS, meas_file);
+        fclose(calib_file);
+        fclose(meas_file);
+
+        printf("Successfully loaded calibration and measurement responses from files.\n");
+
+        // --- allocations diverses pour le traitement ---
+        kiss_fft_cfg cfg_fwd = kiss_fft_alloc(nfft, 0, NULL, NULL); // configs kiss_fft
+        kiss_fft_cfg cfg_inv = kiss_fft_alloc(nfft, 1, NULL, NULL);
+
+        kiss_fft_cpx *buf_closed = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft); // buffers pour FFT
+        kiss_fft_cpx *buf_open   = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
+        kiss_fft_cpx *inv_filter = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
+        kiss_fft_cpx *h_result   = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
+        float *epsilon           = (float*)malloc(sizeof(float) * nfft); // pour stocker epsilon de régularisation
+
+        if (!buf_closed || !buf_open || !inv_filter || !h_result || !epsilon) {
+            fprintf(stderr, "Failed to allocate buffers for processing\n");
+            free(buf_closed);
+            free(buf_open);
+            free(inv_filter);
+            free(h_result);
+            free(epsilon);
+            audio_terminate();
+            return -1;
+        }
+
+        // --- conversion des signaux en format complexe ---
+        for (int i = 0; i < nfft; i++) {
+            buf_closed[i].r = (i < n_samples_chirp) ? calibration_response[i] : 0.0f;
+            buf_closed[i].i = 0.0f;
+            buf_open[i].r   = (i < n_samples_chirp) ? measurement_response[i]   : 0.0f;
+            buf_open[i].i   = 0.0f;
+        }
+
+        free(calibration_response);
+        free(measurement_response);
+
+        // --- pré-calcul du filtre inverse ---
+        generate_linear_inverse_filter(inv_filter, 1.0f, chirp_start_freq, chirp_end_freq, chirp_duration, SAMPLE_RATE, nfft);
+
+        // --- calcul FFT ---
+        kiss_fft(cfg_fwd, buf_closed, buf_closed);
+        kiss_fft(cfg_fwd, buf_open, buf_open);
+
+        // --- déconvolution ---
+        perform_deconvolution(buf_closed, inv_filter, nfft);
+        perform_deconvolution(buf_open, inv_filter, nfft);
+
+        // --- détermination de We ---
+        // buf_open contient G_1 P_open
+        // W_e = \int_0^{f_s/2} |G_1(f) P_{\text{open}}(f)|^2 \, df
+        // On peut approximer l'intégrale par une somme discrète sur les bins de fréquence
+        double We = 0.0;
+        for (int i = 0; i < nfft / 2; i++) {
+            double mag = sqrt(complex_squared_magnitude(buf_open[i]));
+            We += mag * mag;
+        }
+        printf("Estimated We: %.6f\n", We);
+
+        // --- calcul de la régularisation epsilon ---
+        generate_epsilon(epsilon, chirp_start_freq, chirp_end_freq, We, SAMPLE_RATE, nfft);
+
+        // --- extraction de la réponse impulsionnelle -- CRITIQUE
+        // la fenêtre d'extraction est la même peu importe le chirp
+        // à 44.1 kHz, on peut être prudents et prendre 18ms -> 8192 samples
+        // on n'étend pas le signal d'origine avec les durées de fade in et out
+        // pour garder beta et n_samples_chirp constants.
+        int ir_length = 8192; // 18ms à 44.1 kHz
+        int fade_length = 2048; // 4.5ms à 44.1 kHz
+        extract_linear_ir(buf_closed, cfg_inv, cfg_fwd, nfft, ir_length, fade_length);
+        extract_linear_ir(buf_open, cfg_inv, cfg_fwd, nfft, ir_length, fade_length);
+
+        // --- calcul du ratio, sauvegardé dans h_result ---
+        compute_h_lips(h_result, buf_open, buf_closed, epsilon, nfft);
+
+        // --- sauvegarde du CSV ---
+        save_results_csv("output/real_tract_frf.csv", h_result, nfft);
+
+        printf("Processing completed successfully. Check 'output/real_tract_frf.csv' for results.\n");
+
+        // --- nettoyage ---
+        free(buf_closed); free(buf_open); free(inv_filter); 
+        free(h_result); free(epsilon);
+        kiss_fft_free(cfg_fwd); kiss_fft_free(cfg_inv);
+
     } else {
         fprintf(stderr, "Invalid choice\n");
         audio_terminate();
