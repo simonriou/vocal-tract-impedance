@@ -33,7 +33,7 @@ void test_inverse_filter_quality(void) {
     kiss_fft(cfg_fwd, chirp_spectrum, chirp_spectrum);
 
     // 3. Generate Inverse Filter
-    generate_linear_inverse_filter(inv_filter, A, f0, f1, T, fs, nfft);
+    generate_inverse_filter(inv_filter, A, f0, f1, T, fs, nfft, 0); // 0 = linear
 
     // 4. Perform Deconvolution (Multiply in Freq Domain)
     perform_deconvolution(chirp_spectrum, inv_filter, nfft);
@@ -64,8 +64,12 @@ void test_inverse_filter_quality(void) {
     float side_val = fabs(time_result[(max_idx + 1) % nfft].r);
     printf("Side Lobe Level: %f (Should be small)\n", side_val);
 
-    free(chirp_spectrum); free(inv_filter); free(time_result); free(chirp_time);
-    free(cfg_fwd); free(cfg_inv);
+    free(chirp_spectrum); 
+    free(inv_filter); 
+    free(time_result); 
+    free(chirp_time);
+    kiss_fft_free(cfg_fwd); 
+    kiss_fft_free(cfg_inv);
 }
 
 int main() {
