@@ -1,5 +1,60 @@
 #include "processing.h"
 
+void generate_chirp(float *buffer, float A, float f0, float f1, float T, float fs, int type) {
+    int n_samples = (int)(T * fs);
+    
+    if (type == 0) { // Linear chirp
+        for (int t_idx = 0; t_idx < n_samples; t_idx++) {
+            double t = (double)t_idx / fs;
+            buffer[t_idx] = A * (float) sin(M_PI * (2 * f0 * t + (f1 - f0) * t * t / T));
+        }
+    } else if (type == 1) { // Exponential chirp
+        double L = (1 / f0) * ceil(f0 * T / log(f1 / f0));
+        
+        for (int t_idx = 0; t_idx < n_samples; t_idx++) {
+            double t = (double)t_idx / fs;
+            buffer[t_idx] = A * (float) sin(2 * M_PI * f0 * L * exp(t / L));
+        }
+    } else {
+        fprintf(stderr, "Invalid chirp type: %d\n", type);
+    }
+
+}
+
+float find_peak_amplitude(const float *buffer, int n_samples) {
+    float max_amp = 0.0f;
+    for (int i = 0; i < n_samples; i++) {
+        float abs_val = fabsf(buffer[i]);
+        if (abs_val > max_amp) {
+            max_amp = abs_val;
+        }
+    }
+    return max_amp;
+}
+
+int estimate_delay(const float *signal, const float *reference, int n_samples) {
+    // Simple cross-correlation based delay estimation
+    int max_lag = n_samples / 2; // Max lag to search (half the signal length)
+    int best_lag = 0;
+    float max_corr = -1e30f; // Very small number
+
+    for (int lag = -max_lag; lag <= max_lag; lag++) {
+        float corr = 0.0f;
+        for (int i = 0; i < n_samples; i++) {
+            int ref_idx = i + lag;
+            if (ref_idx >= 0 && ref_idx < n_samples) {
+                corr += signal[i] * reference[ref_idx];
+            }
+        }
+        if (corr > max_corr) {
+            max_corr = corr;
+            best_lag = lag;
+        }
+    }
+
+    return best_lag;
+}
+
 void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft) {
     double w0 = 2.0 * M_PI * f0;
     double w1 = 2.0 * M_PI * f1;

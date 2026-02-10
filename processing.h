@@ -6,6 +6,39 @@
 #include "complex_utils.h"
 
 /**
+ * Generates the chirp (time domain).
+ * Parameters:
+ * - buffer: Output buffer for the chirp (must be pre-allocated with n_samples = T * fs size)
+ * - A: Amplitude
+ * - f0, f1: Initial and final freqs (Hz)
+ * - T: Chirp duration (s)
+ * - fs: Sampling freq. (Hz)
+ * - type: 0 for linear, 1 for exponential
+ */
+void generate_chirp(float *buffer, float A, float f0, float f1, float T, float fs, int type);
+
+/**
+ * Finds the peak amplitude in a buffer.
+ * Parameters:
+ * - buffer: Input buffer
+ * - n_samples: Number of samples in the buffer
+ * Returns:
+ * - Peak amplitude (max absolute value)
+ */
+float find_peak_amplitude(const float *buffer, int n_samples);
+
+/**
+ * Finds the delay in samples between two signals by cross-correlation.
+ * Parameters:
+ * - signal: Input signal (e.g., recorded response)
+ * - reference: Reference signal (e.g., original chirp)
+ * - n_samples: Number of samples in each signal
+ * Returns:
+ * - Estimated delay in samples (positive if signal is delayed relative to reference)
+ */
+int estimate_delay(const float *signal, const float *reference, int n_samples);
+
+/**
  * Generates the Linear Inverse Filter spectrum bin by bin.
  * Parameters:
  * - A: Amplitude

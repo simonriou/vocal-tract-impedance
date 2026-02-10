@@ -2,7 +2,7 @@
 #define AUDIO_IO_H
 
 #define SAMPLE_RATE 44100
-#define FRAMES_PER_BUFFER 2048
+#define FRAMES_PER_BUFFER 512
 
 #include <portaudio.h>
 

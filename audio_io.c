@@ -218,110 +218,6 @@ int audio_record(PaDeviceIndex input_device, float sample_rate,
     return samples_read;
 }
 
-int audio_duplex(PaDeviceIndex output_device, PaDeviceIndex input_device,
-                                   float sample_rate,
-                                   const float *playback_buffer, float *record_buffer,
-                                   int num_samples, int num_channels) {
-    if (!playback_buffer || !record_buffer || num_samples <= 0 || num_channels <= 0) {
-        fprintf(stderr, "audio_duplex: Invalid parameters\n");
-        return -1;
-    }
-
-    // Open full-duplex stream
-    PaStream *stream;
-    PaStreamParameters input_params, output_params;
-    
-    // Configure input parameters
-    input_params.device = input_device;
-    input_params.channelCount = num_channels;
-    input_params.sampleFormat = paFloat32;
-    input_params.suggestedLatency = Pa_GetDeviceInfo(input_device)->defaultLowInputLatency;
-    input_params.hostApiSpecificStreamInfo = NULL;
-
-    // Configure output parameters
-    output_params.device = output_device;
-    output_params.channelCount = num_channels;
-    output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_device)->defaultLowOutputLatency;
-    output_params.hostApiSpecificStreamInfo = NULL;
-
-    PaError err = Pa_OpenStream(
-        &stream,
-        &input_params,
-        &output_params,
-        sample_rate,
-        FRAMES_PER_BUFFER,
-        paClipOff,
-        NULL,  // Use blocking I/O
-        NULL
-    );
-
-    if (err != paNoError) {
-        fprintf(stderr, "Failed to open full-duplex stream: %s\n", Pa_GetErrorText(err));
-        return -1;
-    }
-
-    // Start stream
-    err = Pa_StartStream(stream);
-    if (err != paNoError) {
-        fprintf(stderr, "Failed to start full-duplex stream: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(stream);
-        return -1;
-    }
-
-    // Perform simultaneous playback and recording
-    int samples_processed = 0;
-    int total_frames = num_samples;
-    
-    while (samples_processed < total_frames) {
-        int frames_to_process = (total_frames - samples_processed < FRAMES_PER_BUFFER) 
-                                 ? (total_frames - samples_processed) 
-                                 : FRAMES_PER_BUFFER;
-        
-        // Read from input
-        err = Pa_ReadStream(stream,
-                           &record_buffer[samples_processed * num_channels],
-                           frames_to_process);
-        
-        if (err != paNoError) {
-            fprintf(stderr, "Error reading from full-duplex stream: %s\n", Pa_GetErrorText(err));
-            Pa_StopStream(stream);
-            Pa_CloseStream(stream);
-            return -1;
-        }
-
-        // Write to output
-        err = Pa_WriteStream(stream,
-                            &playback_buffer[samples_processed * num_channels],
-                            frames_to_process);
-        
-        if (err != paNoError) {
-            fprintf(stderr, "Error writing to full-duplex stream: %s\n", Pa_GetErrorText(err));
-            Pa_StopStream(stream);
-            Pa_CloseStream(stream);
-            return -1;
-        }
-        
-        samples_processed += frames_to_process;
-    }
-
-    // Stop and close stream
-    err = Pa_StopStream(stream);
-    if (err != paNoError) {
-        fprintf(stderr, "Error stopping full-duplex stream: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(stream);
-        return -1;
-    }
-
-    err = Pa_CloseStream(stream);
-    if (err != paNoError) {
-        fprintf(stderr, "Error closing full-duplex stream: %s\n", Pa_GetErrorText(err));
-        return -1;
-    }
-
-    return 0;
-}
-
 // Callback data structure
 typedef struct {
     const float *playback_buffer;
@@ -426,14 +322,14 @@ int audio_duplex_callback(PaDeviceIndex output_device, PaDeviceIndex input_devic
     input_params.channelCount = num_channels;
     input_params.sampleFormat = paFloat32;
     // Always use high latency for better stability and to prevent overflow
-    input_params.suggestedLatency = Pa_GetDeviceInfo(input_device)->defaultHighInputLatency;
+    // input_params.suggestedLatency = Pa_GetDeviceInfo(input_device)->defaultHighInputLatency;
     input_params.hostApiSpecificStreamInfo = NULL;
 
     // Configure output parameters
     output_params.device = output_device;
     output_params.channelCount = num_channels;
     output_params.sampleFormat = paFloat32;
-    output_params.suggestedLatency = Pa_GetDeviceInfo(output_device)->defaultHighOutputLatency;
+    // output_params.suggestedLatency = Pa_GetDeviceInfo(output_device)->defaultHighOutputLatency;
     output_params.hostApiSpecificStreamInfo = NULL;
 
     PaError err = Pa_OpenStream(

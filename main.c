@@ -1,149 +1,291 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <string.h>
+#include <math.h>
 
-// External Library
-#include "external/kiss_fft/kiss_fft.h"
-
-// Project Headers
+#include "audio_io.h"
 #include "processing.h"
 
-// --- Simulation Parameters ---
 #define SAMPLE_RATE 44100
-#define DURATION    1.0     // Seconds
-#define F_START     100.0   // Hz
-#define F_END       5000.0  // Hz
-#define AMP         0.95    // Signal Amplitude
+#define NUM_CHANNELS 1
 
-// --- Signal Generator ---
-// Generates a Linear Chirp with Harmonic Distortion
-// Ref: MAISON PhD Eq II.7 and II.10
-void generate_signals(float *y_closed, float *y_open, int n_samples) {
-    double w0 = 2.0 * M_PI * F_START;
-    double w1 = 2.0 * M_PI * F_END;
-    double beta = (w1 - w0) / DURATION; // Chirp rate
-
-    for (int t_idx = 0; t_idx < n_samples; t_idx++) {
-        double t = (double)t_idx / SAMPLE_RATE;
-
-        // 1. Calculate Instantaneous Phase for Linear Chirp (Eq II.7)
-        double phase_main = w0 * t + (beta / 2.0) * t * t;
-
-        // 2. Generate Distorted Excitation (Eq II.10)
-        // Fundamental + Harmonics
-        double clean = AMP * sin(phase_main);
-        double dist2 = 0.4 * AMP * sin(2.0 * phase_main);
-        double dist3 = 0.2 * AMP * sin(3.0 * phase_main);
-        double dist4 = 0.1 * AMP * sin(4.0 * phase_main);
-        
-        double excitation = clean + dist2 + dist3 + dist4;
-
-        // 3. Calibration Signal (Closed Mouth)
-        y_closed[t_idx] = (float)excitation;
-
-        // 4. Measurement Signal (Open Mouth)
-        // VALIDATION CASE (G1 = 2):
-        // The output is exactly 2 * the input (excitation) in dB ~ 6dB.
-        y_open[t_idx] = 2.0 * (float)excitation; 
-    }
-}
-
-// --- CSV Exporter ---
-void save_results_csv(const char *filename, kiss_fft_cpx *h_lips, int nfft) {
-    FILE *fp = fopen(filename, "w");
-    if (!fp) {
-        perror("Failed to open output file");
-        return;
-    }
-
-    fprintf(fp, "Frequency_Hz,Magnitude_dB,Phase_Rad\n");
-    for (int i = 0; i < nfft / 2; i++) { // Only positive frequencies
-        double f = (double)i * SAMPLE_RATE / nfft;
-        double mag = sqrt(complex_squared_magnitude(h_lips[i]));
-        
-        // Clamp distinctively small values to avoid log(-inf)
-        if (mag < 1e-9) mag = 1e-9;
-        double db = 20.0 * log10(mag);
-        
-        double phase = atan2(h_lips[i].i, h_lips[i].r);
-        
-        fprintf(fp, "%.2f,%.4f,%.4f\n", f, db, phase);
-    }
-    fclose(fp);
-    printf("Results saved to %s\n", filename);
-}
-
-// --- Main Pipeline ---
 int main() {
-    int n_samples = (int)(SAMPLE_RATE * DURATION);
-    int nfft = 65536; 
-
-    printf("Initializing Pipeline (Validation Mode G1=2):\n");
-    printf("- Fs: %d Hz\n- Duration: %.1f s\n- FFT Size: %d\n", SAMPLE_RATE, DURATION, nfft);
-
-    // 1. Allocations
-    kiss_fft_cfg cfg_fwd = kiss_fft_alloc(nfft, 0, NULL, NULL);
-    kiss_fft_cfg cfg_inv = kiss_fft_alloc(nfft, 1, NULL, NULL);
-
-    kiss_fft_cpx *buf_closed = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
-    kiss_fft_cpx *buf_open   = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
-    kiss_fft_cpx *inv_filter = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
-    kiss_fft_cpx *h_result   = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
-    float *epsilon           = (float*)malloc(sizeof(float) * nfft);
-    
-    // Temporary simulation buffers
-    float *sim_closed = (float*)calloc(n_samples, sizeof(float)); 
-    float *sim_open   = (float*)calloc(n_samples, sizeof(float));
-
-    if (!buf_closed || !buf_open || !sim_closed || !sim_open) return 1;
-
-    // 2. Signal Generation
-    generate_signals(sim_closed, sim_open, n_samples);
-
-    // Convert to Complex FFT buffer
-    for (int i = 0; i < nfft; i++) {
-        buf_closed[i].r = (i < n_samples) ? sim_closed[i] : 0.0f;
-        buf_closed[i].i = 0.0f;
-        buf_open[i].r   = (i < n_samples) ? sim_open[i]   : 0.0f;
-        buf_open[i].i   = 0.0f;
+    // --- initialisation audio ---
+    if (audio_init() != 0) {
+        fprintf(stderr, "Failed to initialize audio system\n");
+        return -1;
     }
 
-    // 3. Pre-computation
-    generate_linear_inverse_filter(inv_filter, AMP, F_START, F_END, DURATION, SAMPLE_RATE, nfft);
-    generate_epsilon(epsilon, F_START, F_END, 10.0f, SAMPLE_RATE, nfft);
+    printf("Audio system initialized successfully.\n");
 
-    // 4. Forward FFT
-    kiss_fft(cfg_fwd, buf_closed, buf_closed);
-    kiss_fft(cfg_fwd, buf_open, buf_open);
-
-    // 5. Deconvolution
-    perform_deconvolution(buf_closed, inv_filter, nfft);
-    perform_deconvolution(buf_open, inv_filter, nfft);
-
-    // 6. Extraction of Linear Impulse Response
-    // The delay between linear IR and 2nd harmonic is ~20ms (100Hz / 4900Hz/s).
-    // To see a flat response, we MUST cut before the harmonics arrive.
-    // We set window to 15ms to be safe.
-    int ir_len = (int)(0.015 * SAMPLE_RATE); // 15ms
-    int fade_len = (int)(0.005 * SAMPLE_RATE); // 5ms
+    // --- sélection des pérophériques i/o ---
+    int num_devices = audio_list_devices();
+    if (num_devices <= 0) {
+        fprintf(stderr, "No audio devices found\n");
+        audio_terminate();
+        return -1;
+    }
     
-    extract_linear_ir(buf_closed, cfg_inv, cfg_fwd, nfft, ir_len, fade_len);
-    extract_linear_ir(buf_open, cfg_inv, cfg_fwd, nfft, ir_len, fade_len);
+    PaDeviceIndex input_device = -1;
+    PaDeviceIndex output_device = -1;
+    printf("Enter input device index: ");
+    scanf("%d", &input_device);
 
-    // 7. Calculate Ratio
-    compute_h_lips(h_result, buf_open, buf_closed, epsilon, nfft);
+    if (input_device < 0 || input_device >= num_devices) {
+        fprintf(stderr, "Invalid input device index\n");
+        audio_terminate();
+        return -1;
+    }
 
-    // 8. Output
-    save_results_csv("vocal_tract_frf.csv", h_result, nfft);
+    printf("Enter output device index: ");
+    scanf("%d", &output_device);
+
+    if (output_device < 0 || output_device >= num_devices) {
+        fprintf(stderr, "Invalid output device index\n");
+        audio_terminate();
+        return -1;
+    }
+
+    // --- paramètres du chirp (durée, type, amplitude, fréquences) ---
+    printf("Enter chirp duration in seconds: ");
+    float chirp_duration;
+    scanf("%f", &chirp_duration);
+    if (chirp_duration <= 0) {
+        fprintf(stderr, "Invalid chirp duration\n");
+        audio_terminate();
+        return -1;
+    }
+
+    printf("Enter recording duration in seconds: ");
+    float recording_duration;
+    scanf("%f", &recording_duration);
+    if (recording_duration <= 0) {
+        fprintf(stderr, "Invalid recording duration\n");
+        audio_terminate();
+        return -1;
+    }
+
+    if (recording_duration < chirp_duration) {
+        printf("Warning: recording duration is shorter than chirp duration. Recording will be truncated.\n");
+    }
+
+    printf("Enter chirp start frequency (Hz): ");
+    float chirp_start_freq;
+    scanf("%f", &chirp_start_freq);
+    if (chirp_start_freq <= 0 || chirp_start_freq >= SAMPLE_RATE / 2) {
+        fprintf(stderr, "Invalid chirp start frequency\n");
+        audio_terminate();
+        return -1;
+    }
+
+    printf("Enter chirp end frequency (Hz): ");
+    float chirp_end_freq;
+    scanf("%f", &chirp_end_freq);
+    if (chirp_end_freq <= 0 || chirp_end_freq >= SAMPLE_RATE / 2) {
+        fprintf(stderr, "Invalid chirp end frequency\n");
+        audio_terminate();
+        return -1;
+    }
+
+    printf("Enter chirp type (linear: l, exponential: e): ");
+    char chirp_type;
+    scanf(" %c", &chirp_type);
+    if (chirp_type != 'l' && chirp_type != 'e') {
+        fprintf(stderr, "Invalid chirp type\n");
+        audio_terminate();
+        return -1;
+    }
+
+    printf("Enter chirp amplitude: ");
+    float chirp_amplitude;
+    scanf("%f", &chirp_amplitude);
+    if (chirp_amplitude < 0.0f) {
+        fprintf(stderr, "Invalid chirp amplitude\n");
+        audio_terminate();
+        return -1;
+    }
+
+    // --- allocation chirp ---
+    int n_samples_chirp = (int)(SAMPLE_RATE * chirp_duration);
+    int n_samples_record = (int)(SAMPLE_RATE * recording_duration);
     
-    printf("Done. Check 'vocal_tract_frf.csv'.\n");
+    float *chirp_buffer = (float*)malloc(sizeof(float) * n_samples_record);
+    if (!chirp_buffer) {
+        fprintf(stderr, "Failed to allocate chirp buffer\n");
+        audio_terminate();
+        return -1;
+    }
 
-    // Cleanup
-    free(buf_closed); free(buf_open); free(inv_filter); 
-    free(h_result); free(epsilon);
-    free(sim_closed); free(sim_open);
-    kiss_fft_free(cfg_fwd); kiss_fft_free(cfg_inv);
+    // Generate chirp in the first part of the buffer
+    generate_chirp(chirp_buffer, chirp_amplitude, chirp_start_freq, chirp_end_freq, chirp_duration, SAMPLE_RATE, (chirp_type == 'l') ? 0 : 1);
+    
+    // Fill the rest with silence if recording_duration > chirp_duration
+    for (int i = n_samples_chirp; i < n_samples_record; i++) {
+        chirp_buffer[i] = 0.0f;
+    }
+
+    // --- preview du chirp dans le device de sortie ---
+    printf("Chirp preview? (y/n): ");
+    char preview_choice;
+    scanf(" %c", &preview_choice);
+    if (preview_choice == 'y' || preview_choice == 'Y') {
+        if (audio_play(output_device, SAMPLE_RATE, chirp_buffer, n_samples_chirp, NUM_CHANNELS) != 0) {
+            fprintf(stderr, "Failed to play chirp preview\n");
+            free(chirp_buffer);
+            audio_terminate();
+            return -1;
+        }
+    }
+
+    // --- envoi du chirp et enregistrement de la réponse (simultané, duplex) ---
+    float *record_buffer = (float*)malloc(sizeof(float) * n_samples_record * NUM_CHANNELS);
+    if (!record_buffer) {
+        fprintf(stderr, "Failed to allocate record buffer\n");
+        free(chirp_buffer);
+        audio_terminate();
+        return -1;
+    }
+
+    // --- choix de script: calibration ou mesure ---
+    int choice;
+    printf("Select mode:\n1. Calibration\n2. Measurement\n3. Processing\nEnter choice: ");
+    scanf("%d", &choice);
+
+    if (choice == 1 || choice == 2) {
+        if (choice == 1) {
+            printf("Running calibration...\n");
+        } else {
+            printf("Running measurement...\n");
+        }
+
+        // --- calibration ---
+        if (choice == 1) {
+            printf("CALIBRATON MODE: Please ensure the lips of the tract are CLOSED and the microphone / speaker are properly positioned.\n");
+            printf("When ready, press Enter to start calibration...");
+        } else {
+            printf("MEASUREMENT MODE: Please ensure the lips of the tract are OPEN and the microphone / speaker are properly positioned.\n");
+            printf("When ready, press Enter to start measurement...");
+        }
+
+        getchar(); // Consume leftover newline
+        getchar(); // Wait for user to press Enter
+
+        // on envoie chirp_buffer et on enregistre dans record_buffer simultanément
+        printf("Starting full-duplex audio (play chirp and record response)...\n");
+        if (audio_duplex_callback(output_device, input_device, SAMPLE_RATE, chirp_buffer, record_buffer, n_samples_record, NUM_CHANNELS) != 0) {
+            fprintf(stderr, "Failed to perform full-duplex audio\n");
+            free(chirp_buffer);
+            free(record_buffer);
+            audio_terminate();
+            return -1;
+        }
+        printf("Full-duplex audio completed successfully.\n");
+
+        printf("Now estimating delay and aligning recorded response with chirp...\n");
+
+        // --- calcul du retard entre enregistrement et envoi ---
+        int delay_samples = -estimate_delay(record_buffer, chirp_buffer, n_samples_record);
+        printf("Estimated delay: %d samples\n", delay_samples);
+
+        // --- décalage du signal enregistré pour aligner avec chirp ---
+        for (int i = 0; i < n_samples_record - delay_samples; i++) {
+            record_buffer[i] = record_buffer[i + delay_samples];
+        }
+
+        printf("Shifted recorded response to align with chirp.\n");
+
+        // --- on transfère les données vers des buffers avec moins de silence ---
+        // nouveau buffer d'enregistrement de taille n_samples_chirp
+        float *record_buffer_final = (float*)malloc(sizeof(float) * n_samples_chirp * NUM_CHANNELS);
+        if (!record_buffer_final) {
+            fprintf(stderr, "Failed to allocate final record buffer\n");
+            free(chirp_buffer);
+            free(record_buffer);
+            audio_terminate();
+            return -1;
+        }
+        memcpy(record_buffer_final, record_buffer, sizeof(float) * n_samples_chirp * NUM_CHANNELS);
+        free(record_buffer); // Free original buffer with more silence
+
+        // idem pour le chirp
+        float *chirp_buffer_final = (float*)malloc(sizeof(float) * n_samples_chirp * NUM_CHANNELS);
+        if (!chirp_buffer_final) {
+            fprintf(stderr, "Failed to allocate final chirp buffer\n");
+            free(chirp_buffer);
+            free(record_buffer_final);
+            audio_terminate();
+            return -1;
+        }
+        memcpy(chirp_buffer_final, chirp_buffer, sizeof(float) * n_samples_chirp * NUM_CHANNELS);
+        free(chirp_buffer); // Free original buffer with more silence
+        
+        char *filename = (choice == 1) ? "output/calibration_response.raw" : "output/measurement_response.raw";
+
+        // --- sauvegarde de la réponse enregistrée pour traitement ultérieur ---
+        FILE *record_file = fopen(filename, "wb");
+        if (!record_file) {
+            fprintf(stderr, "Failed to open file for writing calibration response\n");
+            free(chirp_buffer_final);
+            free(record_buffer_final);
+            audio_terminate();
+            return -1;
+        }
+        fwrite(record_buffer_final, sizeof(float), n_samples_chirp * NUM_CHANNELS, record_file);
+        fclose(record_file);
+        printf("%s response saved to '%s'\n", (choice == 1) ? "Calibration" : "Measurement", filename);
+
+        // --- savegarde du chirp ---
+        char *chirp_filename = (choice == 1) ? "output/calibration_chirp.raw" : "output/measurement_chirp.raw";
+        FILE *chirp_file = fopen(chirp_filename, "wb");
+        if (!chirp_file) {
+            fprintf(stderr, "Failed to open file for writing calibration chirp\n");
+            free(chirp_buffer_final);
+            free(record_buffer_final);
+            audio_terminate();
+            return -1;
+        }
+        fwrite(chirp_buffer_final, sizeof(float), n_samples_chirp * NUM_CHANNELS, chirp_file);
+        fclose(chirp_file);
+        printf("%s chirp saved to '%s'\n", (choice == 1) ? "Calibration" : "Measurement", chirp_filename);
+
+        // --- sauvegarde paramètres de calibration dans un fichier texte ---
+        if (choice == 1) {
+            FILE *param_file = fopen("output/calibration_parameters.txt", "w");
+            if (!param_file) {
+                fprintf(stderr, "Failed to open file for writing calibration parameters\n");
+                free(chirp_buffer_final);
+                free(record_buffer_final);
+                audio_terminate();
+                return -1;
+            }
+
+            fprintf(param_file, "Chirp Duration: %.2f seconds\n", chirp_duration);
+            fprintf(param_file, "Chirp Start Frequency: %.2f Hz\n", chirp_start_freq);
+            fprintf(param_file, "Chirp End Frequency: %.2f Hz\n", chirp_end_freq);
+            fprintf(param_file, "Chirp Type: %s\n", (chirp_type == 'l') ? "Linear" : "Exponential");
+            fprintf(param_file, "Chirp Amplitude: %.2f\n", chirp_amplitude);
+            fclose(param_file);
+            printf("Calibration parameters saved to 'output/calibration_parameters.txt'\n");
+        }
+
+        if (choice == 1) {
+            printf("Calibration completed successfully. You can now run the measurement mode using the same parameters.\n");
+        } else {
+            printf("Measurement completed successfully. You can now run the processing mode to analyze the results.\n");
+        }
+        
+        free(chirp_buffer_final);
+        free(record_buffer_final);
+        audio_terminate();
+        
+    } else if (choice == 3) {
+        printf("Running processing...\n");
+        // --- traitement ---
+    } else {
+        fprintf(stderr, "Invalid choice\n");
+        audio_terminate();
+        return -1;
+    }
 
     return 0;
-}
+} 
