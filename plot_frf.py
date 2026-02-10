@@ -16,7 +16,7 @@ def plot_frf(csv_file):
     Parameters:
     -----------
     csv_file : str
-        Path to the CSV file containing Frequency_Hz, Magnitude_dB, Phase_Rad
+        Path to the CSV file containing Frequency_Hz and other measurement columns
     """
     
     # Check if file exists
@@ -31,36 +31,55 @@ def plot_frf(csv_file):
         print(f"Error reading CSV file: {e}")
         sys.exit(1)
     
-    # Validate columns
-    required_columns = ['Frequency_Hz', 'Magnitude_dB', 'Phase_Rad']
-    if not all(col in df.columns for col in required_columns):
-        print(f"Error: CSV must contain columns: {required_columns}")
+    # Validate that Frequency_Hz column exists
+    if 'Frequency_Hz' not in df.columns:
+        print(f"Error: CSV must contain 'Frequency_Hz' column")
         print(f"Found columns: {list(df.columns)}")
         sys.exit(1)
     
-    # Extract data
+    # Extract frequency
     frequency = df['Frequency_Hz'].values
-    magnitude = df['Magnitude_dB'].values
-    phase = df['Phase_Rad'].values
     
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    # Get all measurement columns (everything except Frequency_Hz)
+    all_columns = [col for col in df.columns if col != 'Frequency_Hz']
     
-    # Plot magnitude response
-    ax1.plot(frequency, magnitude, 'b-', linewidth=1.5, label='Magnitude')
-    ax1.set_xlabel('Frequency (Hz)', fontsize=11)
-    ax1.set_ylabel('Magnitude (dB)', fontsize=11)
-    ax1.set_title('Vocal Tract FRF - Magnitude Response', fontsize=13, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(loc='best')
+    # Filter to only plot Magnitude, Reactance, and Phase
+    measurement_columns = [col for col in all_columns if any(keyword in col for keyword in ['Magnitude', 'Reactance', 'Phase'])]
     
-    # Plot phase response
-    ax2.plot(frequency, phase, 'r-', linewidth=1.5, label='Phase')
-    ax2.set_xlabel('Frequency (Hz)', fontsize=11)
-    ax2.set_ylabel('Phase (Radians)', fontsize=11)
-    ax2.set_title('Vocal Tract FRF - Phase Response', fontsize=13, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(loc='best')
+    if not measurement_columns:
+        print("Error: No measurement columns found in CSV")
+        sys.exit(1)
+    
+    # Define color palette
+    colors = ['b', 'r', 'g', 'orange', 'purple', 'brown', 'pink', 'gray']
+    
+    # Create figure with subplots for each measurement
+    n_plots = len(measurement_columns)
+    fig, axes = plt.subplots(n_plots, 1, figsize=(12, 4 * n_plots))
+    
+    # Handle single plot case (axes is not an array)
+    if n_plots == 1:
+        axes = [axes]
+    
+    # Plot each measurement column
+    for idx, col in enumerate(measurement_columns):
+        ax = axes[idx]
+        color = colors[idx % len(colors)]
+        values = df[col].values
+        
+        ax.plot(frequency, values, color=color, linewidth=1.5, label=col)
+        ax.set_xlabel('Frequency (Hz)', fontsize=11)
+        ax.set_ylabel(col, fontsize=11)
+        ax.set_title(f'Vocal Tract FRF - {col}', fontsize=13, fontweight='bold')
+        ax.set_xlim(205, 1200)
+        
+        # Set y-axis lower bound for Magnitude
+        if 'Magnitude' in col:
+            current_ylim = ax.get_ylim()
+            ax.set_ylim(-30, current_ylim[1])
+        
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
     
     plt.tight_layout()
     
@@ -79,14 +98,13 @@ def plot_frf(csv_file):
     print("\n=== FRF Data Statistics ===")
     print(f"Frequency range: {frequency.min():.2f} - {frequency.max():.2f} Hz")
     print(f"Number of points: {len(frequency)}")
-    print(f"\nMagnitude:")
-    print(f"  Min: {magnitude.min():.2f} dB")
-    print(f"  Max: {magnitude.max():.2f} dB")
-    print(f"  Mean: {magnitude.mean():.2f} dB")
-    print(f"\nPhase:")
-    print(f"  Min: {phase.min():.4f} rad")
-    print(f"  Max: {phase.max():.4f} rad")
-    print(f"  Mean: {phase.mean():.4f} rad")
+    
+    for col in measurement_columns:
+        values = df[col].values
+        print(f"\n{col}:")
+        print(f"  Min: {values.min():.4f}")
+        print(f"  Max: {values.max():.4f}")
+        print(f"  Mean: {values.mean():.4f}")
 
 
 if __name__ == '__main__':

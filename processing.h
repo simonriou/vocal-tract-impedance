@@ -115,6 +115,6 @@ void apply_tukey_window(kiss_fft_cpx *time_signal, int nfft, int ir_len, int fad
  * - nfft: FFT size
  * - ir_len, fade_len: Windowing params
  */
-void extract_linear_ir(kiss_fft_cpx *spectrum, kiss_fft_cfg cfg_inv, kiss_fft_cfg cfg_fft, int nfft, int ir_len, int fade_len);
+void extract_linear_ir(kiss_fft_cpx *spectrum, kiss_fft_cfg cfg_inv, kiss_fft_cfg cfg_fft, int nfft, int n_samples_chirp, int ir_len, int fade_len);
 
 #endif

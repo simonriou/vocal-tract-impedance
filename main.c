@@ -16,10 +16,13 @@ void save_results_csv(const char *filename, kiss_fft_cpx *h_lips, int nfft) {
         return;
     }
 
-    fprintf(fp, "Frequency_Hz,Magnitude_dB,Phase_Rad\n");
+    fprintf(fp, "Frequency_Hz,Magnitude_dB,Resistance_dB,Reactance_dB,Phase_Rad\n");
     for (int i = 0; i < nfft / 2; i++) { // Only positive frequencies
         double f = (double)i * SAMPLE_RATE / nfft;
         double mag = sqrt(complex_squared_magnitude(h_lips[i]));
+
+        double resistance = h_lips[i].r;
+        double reactance = h_lips[i].i;
         
         // Clamp distinctively small values to avoid log(-inf)
         if (mag < 1e-9) mag = 1e-9;
@@ -27,7 +30,7 @@ void save_results_csv(const char *filename, kiss_fft_cpx *h_lips, int nfft) {
         
         double phase = atan2(h_lips[i].i, h_lips[i].r);
         
-        fprintf(fp, "%.2f,%.4f,%.4f\n", f, db, phase);
+        fprintf(fp, "%.2f,%.4f,%.4f,%.4f,%.4f\n", f, db, resistance, reactance, phase);
     }
     fclose(fp);
     printf("Results saved to %s\n", filename);
@@ -396,6 +399,19 @@ int main() {
         perform_deconvolution(buf_closed, inv_filter, nfft);
         perform_deconvolution(buf_open, inv_filter, nfft);
 
+        // sauvegarde des signaux déconvolués pour debug
+        FILE *deconv_calib_file = fopen("output/deconvolved_calibration_response.raw", "wb");
+        FILE *deconv_meas_file = fopen("output/deconvolved_measurement_response.raw", "wb");
+        if (deconv_calib_file && deconv_meas_file) {
+            fwrite(buf_closed, sizeof(kiss_fft_cpx), nfft, deconv_calib_file);
+            fwrite(buf_open, sizeof(kiss_fft_cpx), nfft, deconv_meas_file);
+            fclose(deconv_calib_file);
+            fclose(deconv_meas_file);
+            printf("Deconvolved responses saved for debugging.\n");
+        } else {
+            fprintf(stderr, "Failed to save deconvolved responses for debugging\n");
+        }
+
         // --- détermination de We ---
         // buf_open contient G_1 P_open
         // W_e = \int_0^{f_s/2} |G_1(f) P_{\text{open}}(f)|^2 \, df
@@ -410,15 +426,16 @@ int main() {
         // --- calcul de la régularisation epsilon ---
         generate_epsilon(epsilon, chirp_start_freq, chirp_end_freq, We, SAMPLE_RATE, nfft);
 
-        // --- extraction de la réponse impulsionnelle -- CRITIQUE
+        // --- extraction de la réponse impulsionnelle
         // la fenêtre d'extraction est la même peu importe le chirp
         // à 44.1 kHz, on peut être prudents et prendre 18ms -> 8192 samples
         // on n'étend pas le signal d'origine avec les durées de fade in et out
         // pour garder beta et n_samples_chirp constants.
         int ir_length = 8192; // 18ms à 44.1 kHz
-        int fade_length = 2048; // 4.5ms à 44.1 kHz
-        extract_linear_ir(buf_closed, cfg_inv, cfg_fwd, nfft, ir_length, fade_length);
-        extract_linear_ir(buf_open, cfg_inv, cfg_fwd, nfft, ir_length, fade_length);
+        int fade_length = 16; // 4.5ms à 44.1 kHz
+
+        extract_linear_ir(buf_closed, cfg_inv, cfg_fwd, nfft, n_samples_chirp, ir_length, fade_length);
+        extract_linear_ir(buf_open, cfg_inv, cfg_fwd, nfft, n_samples_chirp, ir_length, fade_length);
 
         // --- calcul du ratio, sauvegardé dans h_result ---
         compute_h_lips(h_result, buf_open, buf_closed, epsilon, nfft);

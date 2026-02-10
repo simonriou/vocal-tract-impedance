@@ -55,26 +55,104 @@ int estimate_delay(const float *signal, const float *reference, int n_samples) {
     return best_lag;
 }
 
-void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft) {
-    double w0 = 2.0 * M_PI * f0;
-    double w1 = 2.0 * M_PI * f1;
-    double beta = (w1 - w0) / T; // Chirp rate (rad.s^-2)
-    double coeff = (1.0 / A) * sqrt(beta / (2.0 * M_PI));
+kiss_fft_cpx cpx_inv(kiss_fft_cpx z) {
+    kiss_fft_cpx res;
+    double denom = z.r * z.r + z.i * z.i;
+    // Avoid division by zero
+    if (denom < 1e-15) {
+        res.r = 0;
+        res.i = 0;
+    } else {
+        res.r = z.r / denom;
+        res.i = -z.i / denom;
+    }
+    return res;
+}
 
-    for (int k = 0; k < nfft; k++) {
-        double f = (double)k * fs / nfft;
-        double w = 2.0 * M_PI * f;
+void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft) {
+    // double w0 = 2.0 * M_PI * f0;
+    // double w1 = 2.0 * M_PI * f1;
+    // double beta = (w1 - w0) / T; // Chirp rate
+    // double coeff = (1.0 / A) * sqrt(beta / (2.0 * M_PI));
+
+    // // 1. Compute for Positive Frequencies (0 to Nyquist)
+    // for (int k = 0; k <= nfft / 2; k++) {
+    //     double f = (double)k * fs / nfft;
+    //     double w = 2.0 * M_PI * f;
+
+    //     // Apply only within the excited frequency range
+    //     if (f >= f0 && f <= f1) {
+    //         // Eq (II.9): Minus sign is outside the bracket in exp{-j[...]}
+    //         double phase_arg = (w - w0) * (w - w0) / (2.0 * beta) + M_PI / 4.0;
+    //         double complex val = coeff * cexp(-I * phase_arg); 
+            
+    //         filter[k] = c99_to_kiss(val);
+    //     } else {
+    //         filter[k].r = 0.0f;
+    //         filter[k].i = 0.0f;
+    //     }
+    // }
+
+    // // 2. Enforce Hermitian Symmetry for Negative Frequencies
+    // // This ensures the IFFT results in a REAL time-domain signal.
+    // for (int k = nfft / 2 + 1; k < nfft; k++) {
+    //     int sym_k = nfft - k; // The corresponding positive frequency index
         
-        // Apply only within the excited frequency range
-        if (f >= f0 && f <=f1) {
-            double phase = -((w - w0) * (w - w0) / (2.0 * beta) + M_PI / 4.0);
-            double _Complex val = coeff * cexp(I * phase);
-            filter[k] = c99_to_kiss(val);
+    //     // Conjugate: Re part is same, Im part is negated
+    //     filter[k].r = filter[sym_k].r;
+    //     filter[k].i = -filter[sym_k].i;
+    // }
+
+    // 1. Allocate temporary buffers
+    float *temp_chirp = (float*)calloc(nfft, sizeof(float)); // Zero init
+    kiss_fft_cpx *temp_fft = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
+    kiss_fft_cfg cfg = kiss_fft_alloc(nfft, 0, NULL, NULL);
+
+    if (!temp_chirp || !temp_fft || !cfg) {
+        fprintf(stderr, "Allocation failed in generate_numerical_inverse_filter\n");
+        // Clean up and return (in production code, handle error propagation)
+        free(temp_chirp); free(temp_fft); free(cfg);
+        return;
+    }
+
+    // 2. Generate the Reference Chirp (Time Domain)
+    // We use the EXACT same function as the playback to ensure perfect match
+    // Note: ensure generate_chirp writes up to T*fs, and the rest of nfft is 0 (handled by calloc)
+    generate_chirp(temp_chirp, A, f0, f1, T, fs, 0); // 0 = Linear
+
+    // 3. Convert to Frequency Domain
+    for (int i = 0; i < nfft; i++) {
+        temp_fft[i].r = temp_chirp[i];
+        temp_fft[i].i = 0.0f;
+    }
+    kiss_fft(cfg, temp_fft, temp_fft);
+
+    // 4. Compute Inverse Filter: 1 / Chirp_Spectrum
+    // We only invert inside the active bandwidth to avoid blowing up noise
+    for (int k = 0; k <= nfft / 2; k++) {
+        double f = (double)k * fs / nfft;
+        
+        // Add a small margin or strictly respect f0/f1
+        if (f >= f0 && f <= f1) {
+            filter[k] = cpx_inv(temp_fft[k]);
         } else {
+            // Outside bandwidth: Zero the filter (Bandpass)
             filter[k].r = 0.0f;
             filter[k].i = 0.0f;
         }
     }
+
+    // 5. Enforce Hermitian Symmetry (for real IFFT result)
+    for (int k = nfft / 2 + 1; k < nfft; k++) {
+        int sym_k = nfft - k;
+        filter[k].r = filter[sym_k].r;
+        filter[k].i = -filter[sym_k].i; // Conjugate
+    }
+
+    // Cleanup
+    free(temp_chirp);
+    free(temp_fft);
+    free(cfg);
 }
 
 void generate_exponential_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float L, float fs, int nfft) {
@@ -217,27 +295,52 @@ void apply_tukey_window(kiss_fft_cpx *time_signal, int nfft, int ir_len, int fad
     }
 }
 
-void extract_linear_ir(kiss_fft_cpx *spectrum, kiss_fft_cfg cfg_inv, kiss_fft_cfg cfg_fft, int nfft, int ir_len, int fade_len) {
-    // 1. Prepare temp time buffer
+void extract_linear_ir(kiss_fft_cpx *spectrum, kiss_fft_cfg cfg_inv, kiss_fft_cfg cfg_fft, int nfft, int n_samples_chirp, int ir_len, int fade_len) {
     kiss_fft_cpx *time_buf = (kiss_fft_cpx*)malloc(sizeof(kiss_fft_cpx) * nfft);
-    if (!time_buf) return; // Handle malloc failure
+    if (!time_buf) return;
 
-    // 2. Perform IFFT
-    // Result is in time_buf
     kiss_fft(cfg_inv, spectrum, time_buf);
 
     // 3. Normalize IFFT result
+    float max_mag = 0.0f;
+    int peak_index = 0;
+
     for (int k = 0; k < nfft; k++) {
         time_buf[k].r /= (kiss_fft_scalar)nfft;
         time_buf[k].i /= (kiss_fft_scalar)nfft;
+
+        // debug
+        float mag = time_buf[k].r * time_buf[k].r + time_buf[k].i * time_buf[k].i;
+        if (mag > max_mag) {
+            max_mag = mag;
+            peak_index = k;
+        }
     }
 
-    // 4. Apply Tukey Window to isolate Linear IR
+    printf("[DEBUG] IR Peak Index: %d (Magnitude: %.2e)\n", peak_index, max_mag);
+
+    // --- sauvegarde intermédiaire pour débug ---
+    FILE *time_calib_file = fopen("output/time_domain_calibration_response.raw", "wb");
+    if (time_calib_file) {
+        fwrite(time_buf, sizeof(float), n_samples_chirp, time_calib_file);
+        fclose(time_calib_file);
+        printf("Time-domain calibration response saved for debugging.\n");
+    } else {
+        fprintf(stderr, "Failed to save time-domain calibration response for debugging\n");
+    }
+
     apply_tukey_window(time_buf, nfft, ir_len, fade_len);
 
-    // 5. Perform Forward FFT
-    // Result is written back to 'spectrum', overwriting the noisy version
-    kiss_fft(cfg_fft, time_buf, spectrum);
+    // --- sauvegarde intermédiaire pour débug ---
+    FILE *windowed_calib_file = fopen("output/windowed_calibration_response.raw", "wb");
+    if (windowed_calib_file) {
+        fwrite(time_buf, sizeof(float), n_samples_chirp, windowed_calib_file);
+        fclose(windowed_calib_file);
+        printf("Windowed calibration response saved for debugging.\n");
+    } else {
+        fprintf(stderr, "Failed to save windowed calibration response for debugging\n");
+    }
 
+    kiss_fft(cfg_fft, time_buf, spectrum); // On remet en domaine fréquentiel après fenêtrage
     free(time_buf);
 }
