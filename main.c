@@ -123,6 +123,14 @@ int main() {
         return -1;
     }
 
+    int type_chirp = -1;
+
+    if (chirp_type == 'e') {
+        type_chirp = 1;
+    } else {
+        type_chirp = 0;
+    }
+
     printf("Enter chirp amplitude: ");
     float chirp_amplitude;
     scanf("%f", &chirp_amplitude);
@@ -389,7 +397,7 @@ int main() {
         free(measurement_response);
 
         // --- pré-calcul du filtre inverse ---
-        generate_linear_inverse_filter(inv_filter, 1.0f, chirp_start_freq, chirp_end_freq, chirp_duration, SAMPLE_RATE, nfft);
+        generate_inverse_filter(inv_filter, 1.0f, chirp_start_freq, chirp_end_freq, chirp_duration, SAMPLE_RATE, nfft, type_chirp);
 
         // --- calcul FFT ---
         kiss_fft(cfg_fwd, buf_closed, buf_closed);

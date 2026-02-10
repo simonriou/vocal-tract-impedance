@@ -39,7 +39,7 @@ float find_peak_amplitude(const float *buffer, int n_samples);
 int estimate_delay(const float *signal, const float *reference, int n_samples);
 
 /**
- * Generates the Linear Inverse Filter spectrum bin by bin.
+ * Generates the Inverse Filter spectrum bin by bin.
  * Parameters:
  * - A: Amplitude
  * - f0, f1: Initial and final freqs (Hz)
@@ -48,7 +48,7 @@ int estimate_delay(const float *signal, const float *reference, int n_samples);
  * - nfft: Number of FFT bins
  */
 
-void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft);
+void generate_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft, int type);
 
 /**
  * Generates the Exponential Inverse Filter spectrum bin by bin.

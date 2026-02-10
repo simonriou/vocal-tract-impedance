@@ -69,7 +69,7 @@ kiss_fft_cpx cpx_inv(kiss_fft_cpx z) {
     return res;
 }
 
-void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft) {
+void generate_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft, int type) {
     // double w0 = 2.0 * M_PI * f0;
     // double w1 = 2.0 * M_PI * f1;
     // double beta = (w1 - w0) / T; // Chirp rate
@@ -118,7 +118,7 @@ void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, flo
     // 2. Generate the Reference Chirp (Time Domain)
     // We use the EXACT same function as the playback to ensure perfect match
     // Note: ensure generate_chirp writes up to T*fs, and the rest of nfft is 0 (handled by calloc)
-    generate_chirp(temp_chirp, A, f0, f1, T, fs, 0); // 0 = Linear
+    generate_chirp(temp_chirp, A, f0, f1, T, fs, type); // 0 = Linear
 
     // 3. Convert to Frequency Domain
     for (int i = 0; i < nfft; i++) {
@@ -155,26 +155,26 @@ void generate_linear_inverse_filter(kiss_fft_cpx *filter, float A, float f0, flo
     free(cfg);
 }
 
-void generate_exponential_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float L, float fs, int nfft) {
-    double w0 = 2.0 * M_PI * f0;
+// void generate_exponential_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float L, float fs, int nfft) {
+//     // double w0 = 2.0 * M_PI * f0;
 
-    for (int k = 0; k < nfft; k++) {
-        double f = (double)k * fs / nfft;
-        double w = 2.0 * M_PI * f;
+//     // for (int k = 0; k < nfft; k++) {
+//     //     double f = (double)k * fs / nfft;
+//     //     double w = 2.0 * M_PI * f;
 
-        // Filter is defined for positive freqs within range
-        if (f >= f0 && f <= f1) {
-            double mag = (2.0 / A) * sqrt(w / (2.0 * M_PI * L));
-            double phase = -w * L * (1.0 - log(w / w0)) + M_PI / 4.0;
+//     //     // Filter is defined for positive freqs within range
+//     //     if (f >= f0 && f <= f1) {
+//     //         double mag = (2.0 / A) * sqrt(w / (2.0 * M_PI * L));
+//     //         double phase = -w * L * (1.0 - log(w / w0)) + M_PI / 4.0;
 
-            double _Complex val = mag * cexp(I * phase);
-            filter[k] = c99_to_kiss(val);
-        } else {
-            filter[k].r = 0.0f;
-            filter[k].i = 0.0f;
-        }
-    }
-}
+//     //         double _Complex val = mag * cexp(I * phase);
+//     //         filter[k] = c99_to_kiss(val);
+//     //     } else {
+//     //         filter[k].r = 0.0f;
+//     //         filter[k].i = 0.0f;
+//     //     }
+//     // }
+// }
 
 double transition_function(double f, double fa, double fb) {
     // Check bounds to avoid division by zero / domain errors
