@@ -5,17 +5,21 @@
 #include <complex.h>
 #include "complex_utils.h"
 
+int calculate_next_power_of_two(int n);
+
 /**
  * Generates the chirp (time domain).
  * Parameters:
- * - buffer: Output buffer for the chirp (must be pre-allocated with n_samples = T * fs size)
+ * - buffer: Output buffer for the chirp (must be pre-allocated with n_samples = (T + Tgap) * fs size)
  * - A: Amplitude
  * - f0, f1: Initial and final freqs (Hz)
  * - T: Chirp duration (s)
  * - fs: Sampling freq. (Hz)
  * - type: 0 for linear, 1 for exponential
+ * - Tgap: Silence padding duration (s) - split equally before and after chirp (total signal = T + Tgap)
+ * - Tfade: Fade-in/fade-out duration (s) - cosine taper applied at chirp boundaries using 0.5*(1-cos(pi*t/Tfade))
  */
-void generate_chirp(float *buffer, float A, float f0, float f1, float T, float fs, int type);
+void generate_chirp(float *buffer, float A, float f0, float f1, float T, float fs, int type, float Tgap, float Tfade);
 
 /**
  * Finds the peak amplitude in a buffer.
@@ -51,13 +55,18 @@ int estimate_delay(const float *signal, const float *reference, int n_samples);
 void generate_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float T, float fs, int nfft, int type);
 
 /**
- * Generates the Exponential Inverse Filter spectrum bin by bin.
+ * Generates the Exponential Inverse Filter spectrum bin by bin using Python-exact logic.
+ * Computes: 2*sqrt(1.j*freq/L) * exp(-2.j*pi*freq*L*(1-log(freq/f0)))
+ * where L = floor(f0 * T / log(f1/f0)) / f0
  * Parameters:
- * - A: Amplitude
- * - f0, f1: Initial and effective final freqs. (Hz)
- * - L: Chirp log-rate increase
+ * - filter: Output filter array (frequency domain)
+ * - A: Amplitude (currently unused for frequency-domain approach)
+ * - f0, f1: Initial and final freqs (Hz)
+ * - T: Chirp duration (s)
+ * - fs: Sampling freq. (Hz)
+ * - nfft: Number of FFT bins
  */
-void generate_exponential_inverse_filter(kiss_fft_cpx *filter, float A, float f0, float f1, float L, float fs, int nfft);
+void generate_exponential_inverse_filter(kiss_fft_cpx *filter, float f0, float f1, float T, float fs, int nfft);
 
 /**
  * Calculates the transition factor T(f) for regularization.
@@ -74,7 +83,7 @@ double transition_function(double f, double fa, double fb);
  * - fs: Sampling rate (Hz)
  * - nfft: FFT size
  */
-void generate_epsilon(float *epsilon, float f0, float f1, float We, float fs, int nfft);
+void generate_epsilon(float *epsilon, float f0, float f1, float fs, int nfft);
 
 /**
  * Performs frequency domain deconvolution.
@@ -104,6 +113,17 @@ void compute_h_lips(kiss_fft_cpx *h_out, const kiss_fft_cpx *p_open, const kiss_
 void apply_tukey_window(kiss_fft_cpx *time_signal, int nfft, int ir_len, int fade_len);
 
 /**
+ * Generates a Tukey window for impulse response extraction.
+ * Window has fade-in at start (nfade_pre), flat region at 1.0, and fade-out at end (nfade_post).
+ * Parameters:
+ * - window: Output buffer (must be pre-allocated with len_window samples)
+ * - nfade_pre: Number of samples for fade-in at the start
+ * - nfade_post: Number of samples for fade-out at the end
+ * - len_window: Total length of the window buffer
+ */
+void generate_tukey_window(float *window, int nfade_pre, int nfade_post, int len_window);
+
+/**
  * Coordinates the extraction of the linear part (F -> T -> Window -> F)
  * 1. IFFT of the raw deconvolved spectrum.
  * 2. Windowing in time domain -> no non-linearities.
@@ -115,6 +135,6 @@ void apply_tukey_window(kiss_fft_cpx *time_signal, int nfft, int ir_len, int fad
  * - nfft: FFT size
  * - ir_len, fade_len: Windowing params
  */
-void extract_linear_ir(kiss_fft_cpx *spectrum, kiss_fft_cfg cfg_inv, kiss_fft_cfg cfg_fft, int nfft, int n_samples_chirp, int ir_len, int fade_len);
+void extract_linear_ir(kiss_fft_cpx *spectrum, kiss_fft_cfg cfg_inv, kiss_fft_cfg cfg_fft, int nfft, int n_samples_chirp, int nimp_pre, int nimp_post, double fs);
 
 #endif

@@ -13,12 +13,24 @@ int select_audio_devices(AudioConfig *audio_cfg, int num_devices) {
         fprintf(stderr, "Invalid input device index\n");
         return -1;
     }
+
+    const PaDeviceInfo *input_info = audio_get_device_info(audio_cfg->input_device);
+    if (!input_info || input_info->maxInputChannels < NUM_CHANNELS) {
+        fprintf(stderr, "Selected input device does not support %d channel(s)\n", NUM_CHANNELS);
+        return -1;
+    }
     
     printf("Enter output device index: ");
     scanf("%d", &audio_cfg->output_device);
     
     if (audio_cfg->output_device < 0 || audio_cfg->output_device >= num_devices) {
         fprintf(stderr, "Invalid output device index\n");
+        return -1;
+    }
+
+    const PaDeviceInfo *output_info = audio_get_device_info(audio_cfg->output_device);
+    if (!output_info || output_info->maxOutputChannels < NUM_CHANNELS) {
+        fprintf(stderr, "Selected output device does not support %d channel(s)\n", NUM_CHANNELS);
         return -1;
     }
     
@@ -65,6 +77,20 @@ int get_chirp_parameters(ChirpParams *chirp_params) {
     scanf("%f", &chirp_params->amplitude);
     if (chirp_params->amplitude < 0.0f) {
         fprintf(stderr, "Invalid chirp amplitude\n");
+        return -1;
+    }
+    
+    printf("Enter silence padding duration in seconds (Tgap): ");
+    scanf("%f", &chirp_params->Tgap);
+    if (chirp_params->Tgap < 0.0f) {
+        fprintf(stderr, "Invalid silence padding duration\n");
+        return -1;
+    }
+    
+    printf("Enter fade-in/fade-out duration in seconds (Tfade): ");
+    scanf("%f", &chirp_params->Tfade);
+    if (chirp_params->Tfade < 0.0f) {
+        fprintf(stderr, "Invalid fade duration\n");
         return -1;
     }
     

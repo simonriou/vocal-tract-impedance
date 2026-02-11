@@ -20,7 +20,7 @@ void test_inverse_filter_quality(void) {
 
     // 1. Generate ideal Time-Domain Chirp
     memset(chirp_time, 0, sizeof(float) * nfft);
-    generate_chirp(chirp_time, A, f0, f1, T, fs, 0); // 0 = linear
+    generate_chirp(chirp_time, A, f0, f1, T, fs, 0, 0.0f, 0.0f); // 0 = linear, no gap, no fade
 
     // 2. Convert Chirp to Frequency Domain
     kiss_fft_cfg cfg_fwd = kiss_fft_alloc(nfft, 0, NULL, NULL);

@@ -7,14 +7,6 @@
 #include <string.h>
 #include <math.h>
 
-int calculate_next_power_of_two(int n) {
-    int nfft = 1;
-    while (nfft < n) {
-        nfft *= 2;
-    }
-    return nfft;
-}
-
 int save_response_files(const float *response_buffer, const float *chirp_buffer, 
                        int n_samples, int is_calibration) {
     const char *response_filename = is_calibration ? "output/calibration_response.raw" : "output/measurement_response.raw";
@@ -53,6 +45,8 @@ int save_calibration_parameters(const ChirpParams *chirp_params) {
     fprintf(param_file, "Chirp End Frequency: %.2f Hz\n", chirp_params->end_freq);
     fprintf(param_file, "Chirp Type: %s\n", (chirp_params->type == 0) ? "Linear" : "Exponential");
     fprintf(param_file, "Chirp Amplitude: %.2f\n", chirp_params->amplitude);
+    fprintf(param_file, "Chirp Gap Duration: %.2f seconds\n", chirp_params->Tgap);
+    fprintf(param_file, "Chirp Fade Duration: %.2f seconds\n", chirp_params->Tfade);
     fclose(param_file);
     printf("Calibration parameters saved to 'output/calibration_parameters.txt'\n");
     
@@ -83,7 +77,7 @@ static int perform_duplex_and_align(const AudioConfig *audio_cfg, const float *c
 
 int run_calibration_mode(const AudioConfig *audio_cfg, const ChirpParams *chirp_params, 
                         float recording_duration) {
-    int n_samples_chirp = (int)(SAMPLE_RATE * chirp_params->duration);
+    int n_samples_chirp = (int)(SAMPLE_RATE * (chirp_params->duration + chirp_params->Tgap));
     int n_samples_record = (int)(SAMPLE_RATE * recording_duration);
     
     /* Allocate buffers */
@@ -99,7 +93,8 @@ int run_calibration_mode(const AudioConfig *audio_cfg, const ChirpParams *chirp_
     
     /* Generate chirp */
     generate_chirp(chirp_buffer, chirp_params->amplitude, chirp_params->start_freq, 
-                   chirp_params->end_freq, chirp_params->duration, SAMPLE_RATE, chirp_params->type);
+                   chirp_params->end_freq, chirp_params->duration, SAMPLE_RATE, chirp_params->type,
+                   chirp_params->Tgap, chirp_params->Tfade);
     
     for (int i = n_samples_chirp; i < n_samples_record; i++) {
         chirp_buffer[i] = 0.0f;
@@ -155,7 +150,7 @@ int run_calibration_mode(const AudioConfig *audio_cfg, const ChirpParams *chirp_
     }
     
     printf("Calibration completed successfully.\n");
-    
+
     free(chirp_buffer);
     free(record_buffer);
     free(record_buffer_final);
@@ -166,7 +161,7 @@ int run_calibration_mode(const AudioConfig *audio_cfg, const ChirpParams *chirp_
 
 int run_measurement_mode(const AudioConfig *audio_cfg, const ChirpParams *chirp_params, 
                         float recording_duration) {
-    int n_samples_chirp = (int)(SAMPLE_RATE * chirp_params->duration);
+    int n_samples_chirp = (int)(SAMPLE_RATE * (chirp_params->duration + chirp_params->Tgap));
     int n_samples_record = (int)(SAMPLE_RATE * recording_duration);
     
     /* Allocate buffers */
@@ -182,7 +177,8 @@ int run_measurement_mode(const AudioConfig *audio_cfg, const ChirpParams *chirp_
     
     /* Generate chirp */
     generate_chirp(chirp_buffer, chirp_params->amplitude, chirp_params->start_freq, 
-                   chirp_params->end_freq, chirp_params->duration, SAMPLE_RATE, chirp_params->type);
+                   chirp_params->end_freq, chirp_params->duration, SAMPLE_RATE, chirp_params->type,
+                   chirp_params->Tgap, chirp_params->Tfade);
     
     for (int i = n_samples_chirp; i < n_samples_record; i++) {
         chirp_buffer[i] = 0.0f;
@@ -314,7 +310,7 @@ int run_processing_mode(const ChirpParams *chirp_params) {
     free(measurement_response);
     
     /* Generate inverse filter and compute FFT */
-    generate_inverse_filter(inv_filter, 1.0f, chirp_params->start_freq, chirp_params->end_freq, 
+    generate_inverse_filter(inv_filter, chirp_params->amplitude, chirp_params->start_freq, chirp_params->end_freq, 
                            chirp_params->duration, SAMPLE_RATE, nfft, chirp_params->type);
     
     kiss_fft(cfg_fwd, buf_closed, buf_closed);
@@ -333,11 +329,17 @@ int run_processing_mode(const ChirpParams *chirp_params) {
     printf("Estimated We: %.6f\n", We);
     
     /* Generate regularization epsilon */
-    generate_epsilon(epsilon, chirp_params->start_freq, chirp_params->end_freq, We, SAMPLE_RATE, nfft);
+    generate_epsilon(epsilon, chirp_params->start_freq, chirp_params->end_freq, SAMPLE_RATE, nfft);
+
+    float L = (1.0 / chirp_params->start_freq) * floor(chirp_params->start_freq * chirp_params->duration / logf(chirp_params->end_freq / chirp_params->start_freq));
+    float delay_harm2 = L * log(2.0f);
+
+    int npre = (int)(delay_harm2 * SAMPLE_RATE);
+    int npost = (int)(0.2 * SAMPLE_RATE);
     
     /* Extract linear impulse response */
-    extract_linear_ir(buf_closed, cfg_inv, cfg_fwd, nfft, n_samples_chirp, 8192, 16);
-    extract_linear_ir(buf_open, cfg_inv, cfg_fwd, nfft, n_samples_chirp, 8192, 16);
+    extract_linear_ir(buf_closed, cfg_inv, cfg_fwd, nfft, n_samples_chirp, npre, npost, SAMPLE_RATE);
+    extract_linear_ir(buf_open, cfg_inv, cfg_fwd, nfft, n_samples_chirp, npre, npost, SAMPLE_RATE);
     
     /* Compute final transfer function */
     compute_h_lips(h_result, buf_open, buf_closed, epsilon, nfft);

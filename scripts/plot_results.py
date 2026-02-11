@@ -3,16 +3,16 @@ import matplotlib.pyplot as plt
 from scipy.signal import spectrogram
 
 # Read the data from the file
-ref_chirp = np.fromfile('output/measurement_chirp.raw', dtype=np.float32)
+ref_chirp = np.fromfile('../output/measurement_chirp.raw', dtype=np.float32)
 
-data_measured = np.fromfile('output/measurement_response.raw', dtype=np.float32)
-data_calibration = np.fromfile('output/calibration_response.raw', dtype=np.float32)
+data_measured = np.fromfile('../output/measurement_response.raw', dtype=np.float32)
+data_calibration = np.fromfile('../output/calibration_response.raw', dtype=np.float32)
 
-data_deconv_open = np.fromfile('output/deconvolved_measurement_response.raw', dtype=np.float32)
-data_deconv_closed = np.fromfile('output/deconvolved_calibration_response.raw', dtype=np.float32)
+data_deconv_open = np.fromfile('../output/deconvolved_measurement_response.raw', dtype=np.float32)
+data_deconv_closed = np.fromfile('../output/deconvolved_calibration_response.raw', dtype=np.float32)
 
-data_deconv_temp = np.fromfile('output/time_domain_calibration_response.raw', dtype=np.float32)
-data_deconv_temp_windowed = np.fromfile('output/windowed_calibration_response.raw', dtype=np.float32)
+data_deconv_temp = np.fromfile('../output/time_domain_calibration_response.raw', dtype=np.float32)
+data_deconv_temp_windowed = np.fromfile('../output/windowed_calibration_response.raw', dtype=np.float32)
 
 
 # Only keep 200 ms of the deconvolved responses, as the rest is none
@@ -21,9 +21,9 @@ data_deconv_temp_windowed = np.fromfile('output/windowed_calibration_response.ra
 
 # Save both data to .wav files for easier hearing
 from scipy.io import wavfile
-wavfile.write('output/measurement_response.wav', 44100, data_measured)
-wavfile.write('output/calibration_response.wav', 44100, data_calibration)
-wavfile.write('output/measurement_chirp.wav', 44100, ref_chirp)
+wavfile.write('../output/measurement_response.wav', 44100, data_measured)
+wavfile.write('../output/calibration_response.wav', 44100, data_calibration)
+wavfile.write('../output/measurement_chirp.wav', 44100, ref_chirp)
 
 # Plot the time data (ref chirp, measure and calibration)
 plt.figure(figsize=(12, 8))

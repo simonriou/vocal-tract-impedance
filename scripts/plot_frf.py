@@ -42,6 +42,23 @@ def plot_frf(csv_file):
     
     # Get all measurement columns (everything except Frequency_Hz)
     all_columns = [col for col in df.columns if col != 'Frequency_Hz']
+
+    # Get lower and upper frequency bounds for plotting in ../output/calibration_parameters.txt
+    try:
+        with open('../output/calibration_parameters.txt', 'r') as f:
+            lines = f.readlines()
+            lower_bound = None
+            upper_bound = None
+            for line in lines:
+                if "Chirp Start Frequency" in line:
+                    lower_bound = float(line.split(":")[1].strip().split()[0])
+                elif "Chirp End Frequency" in line:
+                    upper_bound = float(line.split(":")[1].strip().split()[0])
+            else:
+                print("Warning: Could not find frequency bounds in calibration parameters. Using default x-axis limits.")
+    except Exception as e:
+        print(f"Error reading calibration parameters: {e}")
+        print("Using default x-axis limits.")
     
     # Filter to only plot Magnitude, Reactance, and Phase
     measurement_columns = [col for col in all_columns if any(keyword in col for keyword in ['Magnitude', 'Reactance', 'Phase'])]
@@ -71,12 +88,14 @@ def plot_frf(csv_file):
         ax.set_xlabel('Frequency (Hz)', fontsize=11)
         ax.set_ylabel(col, fontsize=11)
         ax.set_title(f'Vocal Tract FRF - {col}', fontsize=13, fontweight='bold')
-        ax.set_xlim(205, 1200)
+        if lower_bound is not None and upper_bound is not None:
+                print(f"Using frequency bounds from calibration parameters: {lower_bound} Hz to {upper_bound} Hz")
+                ax.set_xlim(lower_bound, upper_bound)
         
-        # Set y-axis lower bound for Magnitude
-        if 'Magnitude' in col:
-            current_ylim = ax.get_ylim()
-            ax.set_ylim(-30, current_ylim[1])
+        # # Set y-axis lower bound for Magnitude
+        # if 'Magnitude' in col:
+        #     current_ylim = ax.get_ylim()
+        #     ax.set_ylim(-30, current_ylim[1])
         
         ax.grid(True, alpha=0.3)
         ax.legend(loc='best')
@@ -108,7 +127,7 @@ def plot_frf(csv_file):
 
 
 if __name__ == '__main__':
-    csv_file = 'output/real_tract_frf.csv'
+    csv_file = '../output/real_tract_frf.csv'
     
     if len(sys.argv) > 1:
         csv_file = sys.argv[1]

@@ -16,6 +16,8 @@ typedef struct {
     float end_freq;
     float duration;
     int type; /* 0 = linear, 1 = exponential */
+    float Tgap; /* Silence padding (s) - split equally before and after chirp */
+    float Tfade; /* Fade-in/fade-out duration (s) */
 } ChirpParams;
 
 /* Processing modes */

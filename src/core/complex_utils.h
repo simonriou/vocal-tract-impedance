@@ -1,5 +1,5 @@
 #include <complex.h>
-#include "external/kiss_fft/kiss_fft.h"
+#include "kiss_fft.h"
 
 /**
  * Mapping: kiss_fft_cpx -> double complex
