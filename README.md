@@ -124,4 +124,5 @@ rm -rf build output/*
    $$H_{\text{lips}} = \frac{P_{\text{open}} \cdot \overline{P_{\text{closed}}}}{|P_{\text{closed}}|^2 + \epsilon}$$
 
 # Credits
+This work is based on the thesis of Thimotée MAISON, "Towards the characterization of dynamical resonators: measuring vocal tract resonances in singing", 2023. The code structure and processing pipeline are inspired by the methodologies described in the thesis, with adaptations for real-time audio processing and user interaction.
 The FFT logic is taken from [KissFFT](https://github.com/mborgerding/kissfft), and the audio processing is done using [PortAudio](http://www.portaudio.com/). The code is written in C. Visualisation is done in Python using Matplotlib.
